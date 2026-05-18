@@ -1,4 +1,4 @@
 # RTOS_smart_greenhouse
 In traditional farming, manual monitoring of environmental factors like soil moisture and temperature is inefficient and prone to human error. A Smart Greenhouse requires a system that can simultaneously monitor multiple sensors, control irrigation logic in real-time, and ensure system safety (e.g., preventing water overflow). An RTOS is necessary here to manage these concurrent tasks, ensuring that a slow sensor-reading task does not delay a critical water-cutoff command.
 
-![Smart Greenhouse Block Diagram](images/greenhouse_block_diagram.png)
+![Smart Greenhouse Block Diagram](images/90281471-5629-48b2-af23-59ad699aba05.jpg)
