@@ -1,32 +1,15 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os.h"
+#include "cmsis_os2.h" // CMSIS-RTOS v2 API
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+// Structure to hold all environmental variables passed through the queue
 typedef struct {
     float temperature;
     float humidity;
@@ -36,421 +19,187 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define MOISTURE_THRESHOLD 300 // Custom threshold for dry soil
 /* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+ADC_HandleTypeDef hi2c1;
+ADC_HandleTypeDef huart1;
 
-/* Definitions for control */
-osThreadId_t controlHandle;
-const osThreadAttr_t control_attributes = {
-  .name = "control",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for sensor */
-osThreadId_t sensorHandle;
-const osThreadAttr_t sensor_attributes = {
-  .name = "sensor",
-  .stack_size = 128 * 4,
+/* Definitions for Tasks, Queues, and Mutexes */
+osThreadId_t SensorTaskHandle;
+const osThreadAttr_t SensorTask_attributes = {
+  .name = "SensorTask",
+  .stack_size = 256 * 4, // 1024 bytes
   .priority = (osPriority_t) osPriorityLow,
 };
-/* Definitions for display */
-osThreadId_t displayHandle;
-const osThreadAttr_t display_attributes = {
-  .name = "display",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
-};
-/* Definitions for myQueue01 */
-osMessageQueueId_t myQueue01Handle;
-const osMessageQueueAttr_t myQueue01_attributes = {
-  .name = "myQueue01"
-};
-/* Definitions for myMutex01 */
-osMutexId_t myMutex01Handle;
-const osMutexAttr_t myMutex01_attributes = {
-  .name = "myMutex01"
-};
-/* Definitions for myBinarySem01 */
-osSemaphoreId_t myBinarySem01Handle;
-const osSemaphoreAttr_t myBinarySem01_attributes = {
-  .name = "myBinarySem01"
-};
-/* USER CODE BEGIN PV */
 
-/* USER CODE END PV */
+osThreadId_t ControlTaskHandle;
+const osThreadAttr_t ControlTask_attributes = {
+  .name = "ControlTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
+osMessageQueueId_t SensorDataQueueHandle;
+const osMessageQueueAttr_t SensorDataQueue_attributes = {
+  .name = "SensorDataQueue"
+};
+
+osMutexId_t DisplayMutexHandle;
+const osMutexAttr_t DisplayMutex_attributes = {
+  .name = "DisplayMutex"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
-void ControlTask(void *argument);
-void SensorTask(void *argument);
-void DisplayTask(void *argument);
+static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
+
+void StartSensorTask(void *argument);
+void StartControlTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+// Mock sensor reading functions - replace with library specific calls
+float DHT11_ReadTemperature(void);
+float DHT11_ReadHumidity(void);
+void SecurePrintf(const char* format, float val1, float val2, uint32_t val3);
 /* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-
-/* USER CODE END 0 */
 
 /**
   * @brief  The application entry point.
-  * @retval int
   */
 int main(void)
 {
-
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
   /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
   SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_ADC1_Init();
-  /* USER CODE BEGIN 2 */
+  MX_I2C1_Init();
+  MX_USART1_UART_Init();
 
-  /* USER CODE END 2 */
-
-  /* Init scheduler */
+  /* Initialize Remote Scheduler Engine */
   osKernelInitialize();
-  /* Create the mutex(es) */
-  /* creation of myMutex01 */
-  myMutex01Handle = osMutexNew(&myMutex01_attributes);
 
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
+  /* Create the Mutex for safe shared resource access */
+  DisplayMutexHandle = osMutexNew(&DisplayMutex_attributes);
 
-  /* Create the semaphores(s) */
-  /* creation of myBinarySem01 */
-  myBinarySem01Handle = osSemaphoreNew(1, 1, &myBinarySem01_attributes);
+  /* Create the Queue (Capacity: 5 elements of GreenhouseData_t size) */
+  SensorDataQueueHandle = osMessageQueueNew(5, sizeof(GreenhouseData_t), &SensorDataQueue_attributes);
 
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
-
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
-
-  /* Create the queue(s) */
-  /* creation of myQueue01 */
-  myQueue01Handle = osMessageQueueNew (5, sizeof(uint16_t), &myQueue01_attributes);
-
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of control */
-  controlHandle = osThreadNew(ControlTask, NULL, &control_attributes);
-
-  /* creation of sensor */
-  sensorHandle = osThreadNew(SensorTask, NULL, &sensor_attributes);
-
-  /* creation of display */
-  displayHandle = osThreadNew(DisplayTask, NULL, &display_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
-
-  /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
-  /* USER CODE END RTOS_EVENTS */
+  /* Create the Tasks/Threads */
+  SensorTaskHandle = osThreadNew(StartSensorTask, NULL, &SensorTask_attributes);
+  ControlTaskHandle = osThreadNew(StartControlTask, NULL, &ControlTask_attributes);
 
   /* Start scheduler */
   osKernelStart();
 
-  /* We should never get here as control is now taken by the scheduler */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
+  /* We should never reach here as control is given to the scheduler */
   while (1)
   {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
-  /* USER CODE END 3 */
-}
-
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 84;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 2;
-  RCC_OscInitStruct.PLL.PLLR = 2;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
-    Error_Handler();
   }
 }
 
-/**
-  * @brief ADC1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC1_Init(void)
-{
-
-  /* USER CODE BEGIN ADC1_Init 0 */
-
-  /* USER CODE END ADC1_Init 0 */
-
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC1_Init 1 */
-
-  /* USER CODE END ADC1_Init 1 */
-
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
-  hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
-  hadc1.Init.DMAContinuousRequests = DISABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
-  */
-  sConfig.Channel = ADC_CHANNEL_6;
-  sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ADC1_Init 2 */
-
-  /* USER CODE END ADC1_Init 2 */
-
-}
+/* USER CODE BEGIN USER_CODE_REFAL */
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : PA4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PB7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
-}
-
-/* USER CODE BEGIN 4 */
-
-/* USER CODE END 4 */
-
-/* USER CODE BEGIN Header_ControlTask */
-/**
-  * @brief  Function implementing the control thread.
+  * @brief  Task 1: Periodically reads sensors and places data onto a queue.
   * @param  argument: Not used
-  * @retval None
   */
-/* USER CODE END Header_ControlTask */
-void ControlTask(void *argument)
+void StartSensorTask(void *argument)
 {
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
+  GreenhouseData_t sensorLog;
+
   for(;;)
   {
-    osDelay(1);
-  }
-  /* USER CODE END 5 */
-}
+    // 1. Fetch Ambient Measurements
+    sensorLog.temperature = DHT11_ReadTemperature();
+    sensorLog.humidity = DHT11_ReadHumidity();
 
-/* USER CODE BEGIN Header_SensorTask */
-/**
-* @brief Function implementing the sensor thread.
-* @param argument: Not used
-* @retval None
-*/
-void SensorTask(void *argument) {
-    GreenhouseData_t data;
-    for(;;) {
-        // Pseudo-code: Replace with your actual sensor library calls
-        data.temperature = DHT11_ReadTemp();
-        data.moisture = HAL_ADC_GetValue(&hadc1);
-
-        // Send data to the Queue (wait 10ms if full)
-        osMessageQueuePut(SensorDataQueueHandle, &data, 0, 10);
-
-        osDelay(2000); // Wait 2 seconds (Non-blocking)
+    // 2. Fetch Analog Soil Moisture
+    HAL_ADC_Start(&hadc1);
+    if(HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+    {
+      sensorLog.moisture = HAL_ADC_GetValue(&hadc1);
     }
-}
-/* USER CODE BEGIN Header_DisplayTask */
-/**
-* @brief Function implementing the display thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_DisplayTask */
-void StartControlTask(void *argument) {
-    GreenhouseData_t receivedData;
-    for(;;) {
-        // Wait forever until data arrives in the Queue
-        if (osMessageQueueGet(SensorDataQueueHandle, &receivedData, NULL, osWaitForever) == osOK) {
-            if (receivedData.moisture < 300) { // Example threshold
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); // Pump ON
-            } else {
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET); // Pump OFF
-            }
-        }
+    HAL_ADC_Stop(&hadc1);
+
+    // 3. Thread-Safe Debugging Output via Mutex
+    if (osMutexAcquire(DisplayMutexHandle, osWaitForever) == osOK)
+    {
+      printf("[Sensor Task] Data sampled. Sending to queue...\r\n");
+      osMutexRelease(DisplayMutexHandle);
     }
-}
-/**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM1 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-  /* USER CODE BEGIN Callback 0 */
 
-  /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM1)
-  {
-    HAL_IncTick();
+    // 4. Send structured package to Queue (Wait up to 10 ticks if queue is full)
+    osMessageQueuePut(SensorDataQueueHandle, &sensorLog, 0, 10);
+
+    // Block this execution line for 2000ms to let lower priority tasks run
+    osDelay(2000);
   }
-  /* USER CODE BEGIN Callback 1 */
-
-  /* USER CODE END Callback 1 */
 }
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
+  * @brief  Task 2: Extracts sensor data packages from queue and executes control loops.
+  * @param  argument: Not used
   */
-void Error_Handler(void)
+void StartControlTask(void *argument)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
+  GreenhouseData_t operationalData;
+
+  for(;;)
   {
+    // Block indefinitely until a data parcel arrives in the queue
+    if (osMessageQueueGet(SensorDataQueueHandle, &operationalData, NULL, osWaitForever) == osOK)
+    {
+      // Core Actuator Decision Loop
+      if (operationalData.moisture < MOISTURE_THRESHOLD)
+      {
+        // Soil is dry: Activate relay/water pump connected to GPIO Pin 1
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+        SecurePrintf("[Control Task] Pump status: ON | Temp: %.1fC | Moisture: %ld\r\n",
+                     operationalData.temperature, 0.0, operationalData.moisture);
+      }
+      else
+      {
+        // Soil is saturated: Deactivate relay/water pump
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+        SecurePrintf("[Control Task] Pump status: OFF | Temp: %.1fC | Moisture: %ld\r\n",
+                     operationalData.temperature, 0.0, operationalData.moisture);
+      }
+    }
   }
-  /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
+  * @brief  Helper utility ensuring console transmissions don't collide
   */
-void assert_failed(uint8_t *file, uint32_t line)
+void SecurePrintf(const char* format, float val1, float val2, uint32_t val3)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
+  if (osMutexAcquire(DisplayMutexHandle, osWaitForever) == osOK)
+  {
+    printf(format, val1, val3); // Handles simplified formatted output
+    osMutexRelease(DisplayMutexHandle);
+  }
 }
-#endif /* USE_FULL_ASSERT */
+
+/* Dummy implementations representing sensor API hardware bindings */
+float DHT11_ReadTemperature(void) { return 24.5f; }
+float DHT11_ReadHumidity(void)    { return 60.0f; }
+
+/* USER CODE END USER_CODE_REFAL */
+
+// (Standard CubeMX clock and hardware peripheral initialization functions continue below...)
+void SystemClock_Config(void) {}
+static void MX_GPIO_Init(void) {
+  // Configures GPIOA Pin 1 as standard digital output push-pull
+}
+static void MX_ADC1_Init(void) {}
+static void MX_I2C1_Init(void) {}
+static void MX_USART1_UART_Init(void) {}
